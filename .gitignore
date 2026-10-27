@@ -1,0 +1,17 @@
+node_modules/
+data/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+dist/
+.pnpm-store/
+.graylog-setup/
+.env
+.env.*
+!.env.example
+*.log
+*.pid
+*.tar
+*.tar.gz
+backups/

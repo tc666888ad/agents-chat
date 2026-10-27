@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 圆桌</title>
+  <link rel="stylesheet" href="/assets/rt.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- 左：房间 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <span>AI 圆桌</span>
+        <span class="ver">0.4</span>
+      </div>
+      <button class="btn primary block" id="new-room">＋ 新建房间</button>
+      <div class="room-list" id="room-list"></div>
+      <div class="sidebar-foot">
+        <button class="link" id="open-library">管理 agent</button>
+        <a class="link muted" href="/legacy">旧版协商室</a>
+      </div>
+    </aside>
+
+    <!-- 中：聊天 -->
+    <main class="main" id="main">
+      <div class="welcome" id="welcome">
+        <div class="welcome-card">
+          <h1>让几个 AI 围着一张桌子聊</h1>
+          <ol class="steps">
+            <li><b>新建房间</b>，上传需求文档</li>
+            <li><b>添加 agent</b>：API 模型、本地 Agent（Codex / DeepSeek Harness，绑定项目目录后自动读代码）或通过 MCP 连接外部 Agent</li>
+            <li><b>出方案、审查、修订</b>：按步骤选择 Agent，产物保存到房间</li>
+          </ol>
+          <button class="btn primary lg" id="welcome-new">新建第一个房间</button>
+        </div>
+      </div>
+
+      <section class="room" id="room" hidden>
+        <header class="room-head">
+          <input class="room-title" id="room-title" maxlength="100" title="点击修改房间名" />
+          <div class="head-members" id="head-members"></div>
+          <label class="auto-collaborate"><input type="checkbox" id="auto-collaborate" /> 自动协作</label>
+          <button class="btn ghost sm" id="flow-plan" title="选择一个 agent 根据需求文档出方案">出方案</button>
+          <button class="btn ghost sm" id="toggle-side" title="成员与资料">成员与资料</button>
+        </header>
+
+        <div class="collaboration-bar" id="collaboration-bar" aria-live="polite" hidden>
+          <div class="collaboration-main"><strong id="collaboration-status"></strong><span class="spacer"></span>
+            <button class="btn sm ghost" id="collaboration-stop" hidden>停止协作</button>
+            <button class="btn sm primary" id="collaboration-resume" hidden>继续协作</button>
+            <button class="btn sm ghost" id="collaboration-finish" hidden>结束本轮</button></div>
+          <div id="collaboration-note"></div><div class="muted small" id="collaboration-hint"></div>
+        </div>
+        <div class="messages" id="messages"></div>
+
+        <form class="composer" id="composer" autocomplete="off">
+          <div class="targets" id="targets"></div>
+          <div class="input-wrap">
+            <textarea id="input" rows="1" placeholder="说点什么…  输入 @ 可以点名"></textarea>
+            <div class="mention-pop" id="mention-pop" hidden></div>
+            <button type="submit" class="btn primary send" id="send" title="发送（Enter）">发送</button>
+          </div>
+          <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · @ 点名</div>
+        </form>
+      </section>
+    </main>
+
+    <!-- 右：成员与资料 -->
+    <aside class="side" id="side" hidden>
+      <section class="side-sec">
+        <div class="side-head">
+          <h3>成员 <span class="muted" id="member-count"></span></h3>
+          <button class="btn ghost sm" id="add-member">＋ 添加</button>
+        </div>
+        <div class="member-list" id="member-list"></div>
+      </section>
+      <section class="side-sec docs-sec">
+        <div class="side-head">
+          <h3>需求文档 <span class="muted" id="doc-count"></span></h3>
+          <label class="btn ghost sm upload-btn" for="doc-input">＋ 上传</label>
+          <input id="doc-input" type="file" hidden multiple accept=".md,.markdown,.txt,.json,.yaml,.yml,.csv,.sql,.xml,.log,.proto,.docx,.doc,.rtf,.html,.htm,.odt,.pdf" />
+        </div>
+        <p class="muted small">上传后会自动提取文字，出方案和审查时会带给模型。单个文件最大 10MB。</p>
+        <div class="doc-list" id="doc-list"></div>
+      </section>
+      <section class="side-sec project-sec">
+        <div class="side-head">
+          <h3>项目目录</h3>
+          <span class="muted save-state" id="project-state"></span>
+        </div>
+        <p class="muted small">本地 Agent 在这里只读运行，会读项目记忆和代码。填绝对路径，留空保存即解绑。</p>
+        <div class="copy-line">
+          <input id="project-dir" spellcheck="false" placeholder="/Users/你/project/xxx" />
+          <button type="button" class="btn ghost sm" id="project-save">保存</button>
+        </div>
+      </section>
+      <section class="side-sec grow">
+        <div class="side-head">
+          <h3>补充说明</h3>
+          <span class="muted save-state" id="prd-state"></span>
+        </div>
+        <p class="muted small">临时背景或上传文档里没有的约束。</p>
+        <textarea id="prd" class="prd" placeholder="可选：例如后端必须兼容现有 API…"></textarea>
+      </section>
+      <section class="side-sec artifacts-sec">
+        <div class="side-head"><h3>产物</h3></div>
+        <div class="artifact-list" id="artifact-list"><span class="muted small">还没有方案文件</span></div>
+      </section>
+      <section class="side-sec danger-zone">
+        <button class="link danger" id="delete-room">删除这个房间</button>
+      </section>
+    </aside>
+  </div>
+
+  <!-- 弹层 -->
+  <div class="overlay" id="overlay" hidden></div>
+  <div class="popover" id="popover" hidden></div>
+  <div class="toasts" id="toasts"></div>
+
+  <script src="/assets/rt.js"></script>
+</body>
+</html>

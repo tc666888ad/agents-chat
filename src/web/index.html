@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>接口协商室</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      接口协商室
+      <span class="badge">MVP 0.2</span>
+    </div>
+    <div class="topbar-right"><span class="muted">先让两个 AI 把接口定下来，人只负责最后点头</span></div>
+  </header>
+
+  <main class="home">
+    <section class="hero">
+      <h1>两个 AI 先谈，人最后点头</h1>
+      <p>
+        你拉两个 agent 进来（DeepSeek、Codex 都行）。一个做设计、一个做复核，先把接口方案对齐；
+        方案稳定后把前端同事拉进来，前端和后端各点一次「确认」，就可以开工了。
+      </p>
+    </section>
+
+    <section class="card create">
+      <h2>建一个房间</h2>
+      <form id="create-form">
+        <label class="field">
+          <span>标题</span>
+          <input name="title" required maxlength="200" placeholder="例：用户中心接口" />
+        </label>
+
+        <div class="field">
+          <span>谁先做设计</span>
+          <div class="radio-row">
+            <label><input type="radio" name="designer_seat" value="A" checked /> 入场券 A 做设计</label>
+            <label><input type="radio" name="designer_seat" value="B" /> 入场券 B 做设计</label>
+          </div>
+          <p class="hint">两张票分别给两个 agent。你打算让谁先写方案，就把哪张票给它。</p>
+        </div>
+
+        <label class="field">
+          <span>范围（可选）</span>
+          <input name="op_scope" placeholder="例：用户列表、用户详情、禁用用户" />
+        </label>
+
+        <label class="field">
+          <span>需求文档（可选，粘进来）</span>
+          <textarea name="prd" rows="4" placeholder="把 PRD 或接口需求粘进来，agent 一进房间就能读到。"></textarea>
+        </label>
+
+        <button type="submit" class="primary">建房，生成三张入场券</button>
+      </form>
+
+      <div class="created" id="created" hidden>
+        <h3>房间建好了：<span id="created-code"></span></h3>
+        <p class="muted" id="created-tip"></p>
+        <div class="tokens" id="created-tokens"></div>
+        <div class="created-actions">
+          <a class="primary as-link" id="enter-room" href="#">以「后端」身份进入房间</a>
+          <button type="button" class="ghost" id="copy-tokens">复制两张 agent 票</button>
+        </div>
+        <pre class="code" id="created-cmd"></pre>
+      </div>
+    </section>
+
+    <section class="card rooms">
+      <div class="card-head">
+        <h2>房间</h2>
+        <span class="muted" id="room-count"></span>
+      </div>
+      <div class="room-list" id="room-list"></div>
+    </section>
+
+    <footer class="home-foot">
+      房间里的接口方案是唯一真相：每版都留着作者、时间和逐字段改动；agent 说的每句话都进历史。
+    </footer>
+  </main>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

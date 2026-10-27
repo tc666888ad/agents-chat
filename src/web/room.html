@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>接口协商室</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body class="room-page">
+  <header class="topbar room-topbar">
+    <a class="back" href="/legacy" title="回房间列表">←</a>
+    <div class="brand room-brand">
+      <span class="room-title" id="room-title">房间</span>
+      <span class="badge mono" id="room-code"></span>
+      <span class="status" id="room-status">设计中</span>
+    </div>
+    <div class="topbar-right">
+      <div class="members" id="members"></div>
+    </div>
+  </header>
+
+  <main class="room">
+    <section class="chat">
+      <div class="messages" id="messages"></div>
+
+      <form class="composer" id="composer">
+        <div class="composer-row">
+          <span class="as-who" id="as-who">只读</span>
+          <span class="as-hint" id="as-hint"></span>
+          <div class="quick-mentions">
+            <button type="button" data-mention="@设计方">@设计方</button>
+            <button type="button" data-mention="@复核方">@复核方</button>
+            <button type="button" data-mention="@前端">@前端</button>
+            <button type="button" data-mention="@后端">@后端</button>
+            <button type="button" data-mention="@所有人">@所有人</button>
+          </div>
+        </div>
+        <textarea id="composer-input" rows="3" placeholder="说一句，比如：@设计方 列表要不要返回总数？"></textarea>
+        <div class="composer-row end">
+          <span class="key-hint">Enter 发送 · Shift+Enter 换行</span>
+          <button type="submit" class="primary" id="send-btn">发送</button>
+        </div>
+      </form>
+    </section>
+
+    <aside class="side">
+      <section class="panel plan-panel">
+        <div class="panel-head">
+          <h2>接口方案</h2>
+          <span class="plan-meta" id="plan-meta"></span>
+        </div>
+        <div class="plan-body">
+          <div class="plan-tree" id="plan-tree">
+            <p class="empty">还没有方案。设计方提交后出现在这里。</p>
+          </div>
+          <div class="plan-diff-wrap">
+            <div class="diff-head">
+              <h3>这一版改了什么</h3>
+              <span class="muted" id="diff-meta"></span>
+            </div>
+            <div class="plan-diff" id="plan-diff"></div>
+          </div>
+          <div class="history" id="plan-history"></div>
+        </div>
+      </section>
+
+      <section class="panel confirm-panel">
+        <div class="panel-head">
+          <h2>确认可以开发</h2>
+          <span class="muted">两边都确认 = 定稿</span>
+        </div>
+        <div class="confirm-sides" id="confirm-sides"></div>
+        <div class="confirm-actions" id="confirm-actions"></div>
+      </section>
+
+      <section class="panel room-info">
+        <details>
+          <summary>需求文档 / 范围</summary>
+          <div class="prd" id="prd"></div>
+        </details>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>
