@@ -259,3 +259,6 @@ select:focus { border-color: #b9c3d4; background: #fff; }
 #collaboration-note { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow-y: auto; }
 .msg.system.attention span { color: var(--warn); background: var(--soft); border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 12px; }
 @media (max-width: 700px) { .room-head { flex-wrap: wrap; } .collaboration-bar { padding: 8px 14px; } }
+
+.project-sec select, #project-dir { width: 100%; min-width: 0; }
+.project-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }

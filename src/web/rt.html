@@ -90,10 +90,19 @@
           <h3>项目目录</h3>
           <span class="muted save-state" id="project-state"></span>
         </div>
-        <p class="muted small">本地 Agent 在这里只读运行，会读项目记忆和代码。填绝对路径，留空保存即解绑。</p>
-        <div class="copy-line">
-          <input id="project-dir" spellcheck="false" placeholder="/Users/你/project/xxx" />
-          <button type="button" class="btn ghost sm" id="project-save">保存</button>
+        <p class="muted small">选择成员电脑及已授权的项目，Codex/DSH 在该电脑只读分析并回传结果。</p>
+        <label class="field"><span>执行电脑</span><select id="project-device"><option value="">未绑定</option></select></label>
+        <label class="field" id="workspace-field"><span>授权项目</span><select id="project-workspace"><option value="">先选择电脑</option></select></label>
+        <p class="muted small" id="device-state"></p>
+        <div id="server-project-field" hidden>
+          <p class="muted small">同机执行：路径必须位于网页服务所在环境。Docker 中无法读取成员电脑路径。</p>
+          <input id="project-dir" spellcheck="false" placeholder="服务器内的项目绝对路径" />
+        </div>
+        <div class="project-actions">
+          <button type="button" class="btn ghost sm" id="project-save">保存绑定</button>
+          <button type="button" class="btn ghost sm" id="device-refresh">刷新</button>
+          <button type="button" class="btn ghost sm" id="device-pair">配对电脑</button>
+          <button type="button" class="btn ghost sm" id="device-revoke">吊销电脑</button>
         </div>
       </section>
       <section class="side-sec grow">

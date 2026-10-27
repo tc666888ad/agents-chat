@@ -177,3 +177,29 @@ test('停止协作调用当前房间；继续提交决定和目标，切换房�
   await p.node('#collaboration-form').handlers.submit({ preventDefault() {}, submitter: { disabled: false } });
   assert.equal(p.calls.length, 2);
 });
+
+function connectorPage() {
+  const nodes = new Map<string, any>(); const calls: any[] = [];
+  const node = (s: string) => {
+    if (!nodes.has(s)) nodes.set(s, { value: '', hidden: false, textContent: '', innerHTML: '', handlers: {} as any, addEventListener(k: string, fn: any) { this.handlers[k] = fn; } });
+    return nodes.get(s);
+  };
+  const devices = [{ id: 'dev-1', name: '成员电脑', online: true, executors: ['codex'], workspaces: [{ id: 'ws-1', name: '业务项目' }] }];
+  const ctx = createContext({ document: { querySelector: node, addEventListener() {} }, window: { addEventListener() {} },
+    localStorage: { getItem: () => null }, setInterval() {}, setTimeout() {}, clearTimeout() {}, location: { origin: 'http://example.invalid' },
+    fakeApi: async (path: string, options: any) => { calls.push({ path, options }); return path === '/api/rt/devices' ? { devices } : { room: { device_id: 'dev-1', workspace_id: 'ws-1', workspace_name: '业务项目', device_name: '成员电脑' } }; },
+  });
+  runInContext(source + `\napi=fakeApi;toast=()=>{};renderMembers=()=>{};globalThis.ui={state,loadDevices,saveProjectBinding};`, ctx);
+  ctx.ui.state.code = 'RT-TEST'; ctx.ui.state.snap = { room: {}, members: [] };
+  return { ui: ctx.ui, node, calls, devices };
+}
+test('连接器页面显示在线电脑和授权项目，保存仅发送标识', async () => {
+  const p = connectorPage(); await p.ui.loadDevices();
+  assert.match(p.node('#project-device').innerHTML, /成员电脑.*在线/);
+  p.node('#project-device').value = 'dev-1'; await p.node('#project-device').handlers.change();
+  assert.match(p.node('#project-workspace').innerHTML, /业务项目/);
+  p.node('#project-workspace').value = 'ws-1'; await p.ui.saveProjectBinding();
+  const call = p.calls.find(c => c.options?.method === 'PATCH');
+  assert.equal(call.options.body.device_id, 'dev-1'); assert.equal(call.options.body.workspace_id, 'ws-1');
+  assert.equal(call.options.body.project_dir, undefined);
+});

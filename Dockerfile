@@ -7,7 +7,7 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
 COPY tests ./tests
-RUN pnpm exec tsc -p . && cp -R src/web dist/src/web \
+RUN pnpm exec tsc -p . && node scripts/package-connector.mjs && cp -R src/web dist/src/web \
     && pnpm prune --prod --ignore-scripts
 
 FROM node:24-bookworm-slim AS runtime

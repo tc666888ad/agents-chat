@@ -1,4 +1,24 @@
 export const RT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS rt_devices (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+  executors TEXT NOT NULL DEFAULT '[]', last_seen_at TEXT,
+  created_at TEXT NOT NULL, revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS rt_pairings (
+  code_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, used_at TEXT
+);
+CREATE TABLE IF NOT EXISTS rt_device_workspaces (
+  device_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL,
+  PRIMARY KEY(device_id, workspace_id)
+);
+CREATE TABLE IF NOT EXISTS rt_connector_tasks (
+  id TEXT PRIMARY KEY, room_code TEXT NOT NULL, seq INTEGER NOT NULL,
+  device_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+  state TEXT NOT NULL, attempt_id TEXT UNIQUE, lease_expires_at INTEGER NOT NULL DEFAULT 0,
+  queue_expires_at INTEGER NOT NULL, deadline_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rt_connector_queue ON rt_connector_tasks(device_id, state);
+
 CREATE TABLE IF NOT EXISTS rt_collaborations (
   id TEXT NOT NULL, room_code TEXT PRIMARY KEY, original_task TEXT NOT NULL,
   current_seq INTEGER NOT NULL, reply_count INTEGER NOT NULL DEFAULT 1,
@@ -105,6 +125,9 @@ export function migrateRt(db: { exec(sql: string): void; prepare(sql: string): {
   if (!cols.includes('progress')) db.exec("ALTER TABLE rt_messages ADD COLUMN progress TEXT NOT NULL DEFAULT ''");
   const roomCols = (db.prepare('PRAGMA table_info(rt_rooms)').all() as { name: string }[]).map((c) => c.name);
   if (!roomCols.includes('auto_collaborate')) db.exec('ALTER TABLE rt_rooms ADD COLUMN auto_collaborate INTEGER NOT NULL DEFAULT 0');
+  for (const name of ['device_id', 'workspace_id']) {
+    if (!roomCols.includes(name)) db.exec(`ALTER TABLE rt_rooms ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
+  }
   if (!roomCols.includes('project_dir')) db.exec("ALTER TABLE rt_rooms ADD COLUMN project_dir TEXT NOT NULL DEFAULT ''");
 }
 
@@ -128,6 +151,8 @@ export interface AgentRow {
 }
 
 export interface RtRoomRow {
+  device_id: string;
+  workspace_id: string;
   auto_collaborate: number;
   code: string;
   title: string;

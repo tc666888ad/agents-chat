@@ -11,7 +11,9 @@
     "start": "tsx src/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "demo": "tsx scripts/demo.ts",
-    "admin": "tsx src/admin/cli.ts"
+    "admin": "tsx src/admin/cli.ts",
+    "connector": "tsx src/connector/cli.ts",
+    "build": "tsc -p . && node scripts/package-connector.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

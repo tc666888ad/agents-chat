@@ -22,6 +22,13 @@ function sendFile(reply: FastifyReply, absPath: string): FastifyReply {
 }
 
 export function registerWeb(app: FastifyInstance): void {
+  app.get('/downloads/agents-chat-connector.tar.gz', (_req, reply) => {
+    const compiled = resolve(ROOT, 'downloads', 'agents-chat-connector.tar.gz');
+    const archive = existsSync(compiled) ? compiled : resolve(ROOT, 'dist', 'downloads', 'agents-chat-connector.tar.gz');
+    if (!existsSync(archive)) return reply.code(404).send('连接器下载包尚未构建，请运行 npm run build');
+    reply.header('content-disposition', 'attachment; filename="agents-chat-connector.tar.gz"');
+    return sendFile(reply, archive);
+  });
   // 0.3 圆桌（默认）
   app.get('/', (_req, reply) => sendFile(reply, join(WEB_DIR, 'rt.html')));
   app.get<{ Params: { code: string } }>('/r/:code', (req, reply) => {

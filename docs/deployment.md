@@ -63,9 +63,9 @@ docker-compose up -d
 
 - API Agent 从服务器直接请求其配置的模型 URL；需服务器可以访问该模型地址。
 - 外部 MCP Agent 从自己的机器连接 `http://服务器IP:3010/rt-mcp`，使用 Agent 页面生成的 token；需要客户端主动领取待办。
-- 本地 Agent 的 CLI 和项目目录必须位于 Web 服务的运行环境。本 Docker 基础镜像不包含 Codex/DSH；从 Mac 迁移的 `/Users/...` 路径在服务器无效。
-- 本次保留原 Agent 配置，不迁移 Mac 全局认证、不自动安装 CLI、不调用真实模型测试。需要本地执行器时，在自定义镜像中安装 Linux CLI，并按需挂载受限的项目目录；不能挂载 Docker socket、宿主机根目录或整个 home。
-- 服务器网页不能直接唤醒 Mac 上的 Codex/VS Code 插件；跨机器自动执行需要后续实现本地桥接。
+- 本地 Agent 可绑定成员电脑连接器，选择该电脑授权项目；旧同机模式仍要求 CLI 和目录位于 Web 服务运行环境。本 Docker 镜像不包含 Codex/DSH。
+- 保留原 Agent 配置，不迁移 Mac 全局认证、不自动安装 CLI、不调用真实模型测试。成员电脑运行方式见下文「成员电脑连接器」。
+- 网页通过成员电脑主动运行的连接器调用 CLI；不能直接唤醒 Codex/VS Code 桌面插件。
 
 V1 网页管理接口沿用现有内网访问模式，部署只绑定指定内网地址；不添加公网入口。需要登录、按人隔离等能力时另行实现。
 
@@ -79,3 +79,31 @@ V1 网页管理接口沿用现有内网访问模式，部署只绑定指定内�
 - 现有业务容器保持运行，没有改防火墙、Nginx、系统包或重启 Docker。
 - 本地 73/73 测试、TypeScript 与前端语法检查通过。未调用真实模型。
 - 镜像使用 Node 24.22.1，修正了源码权限为 600 时普通用户无法读取的问题。Linux 无 macOS textutil，新增 Word/RTF 等上传需先转成 Markdown/纯文本。
+
+## 成员电脑连接器（V1 增量）
+
+当前增量已在本地实现并离线验证，尚未部署到服务器：本轮 SSH 预检因无有效认证失败，原服务器 V1 保持原状。完成下述增量部署后网页才提供配对和下载入口。
+
+服务器网页可以绑定成员电脑上明确授权的项目；实际 Codex/DSH 子进程由成员电脑启动，服务器 Docker 中无需安装 CLI 或挂载电脑目录。同机 `project_dir` 模式继续兼容。绑定设备后不会回退到服务器执行器。
+
+网页右侧「项目目录」→「配对电脑」，下载连接器压缩包，解压后在成员电脑终端执行（Node.js 22 或以上，无需 npm install）：
+
+```sh
+node connector/cli.js pair --server http://172.22.86.174:3010 --name 我的电脑
+# 按终端提示输入网页上的一次性配对码，十分钟有效，只能使用一次。
+node connector/cli.js add-workspace "/Users/你/project/业务项目" --name 业务项目
+node connector/cli.js list
+node connector/cli.js run
+```
+
+保持终端运行。网页点「刷新」，选择电脑和授权项目，「保存绑定」，再为本地 Agent 选择 Codex CLI / DeepSeek Harness。源码工作区也可用 `npm run connector -- ...` 执行同样的命令；`npm run build` 会生成 `dist/downloads/agents-chat-connector.tar.gz`，网页下载链接使用此文件。
+
+配置默认保存到 `~/.agents-chat-connector.json`（权限 600），包含设备 token 及项目绝对路径；可用 `RT_CONNECTOR_CONFIG` 指定其他文件。服务器只接收项目标识/显示名和执行器列表。不要分享配置文件或将其打进镜像/Git。配对到另一服务器时使用另一配置文件，CLI 不覆盖已有配置。
+
+连接器使用**成员电脑自己的 CLI 配置或环境变量**：Codex 先在本机配置认证；DSH headless 需在本机提供 `DEEPSEEK_API_KEY`，也可通过 `DEEPSEEK_BASE_URL` 指定地址。执行器路径可用 `RT_CODEX_BIN` / `RT_DSH_BIN` 指定。网页保留原 URL、Key、模型名；连接器任务仅透传模型名，**不下发服务器已保存的 URL/Key**。网页 URL/Key 仍供旧同机执行模式使用。没有迁移全局认证或自动调用模型验证。
+
+`Ctrl+C` 停止连接器。修改授权项目需先停止，重新运行 `add-workspace` 后再启动；同一配置通过独占锁限制为单进程。异常退出若留下 `.lock` 文件，先确认原连接器及其子进程已退出，再删除该锁文件。网页「吊销电脑」会使 token 立即失效；取消任务和断线会使本机进程停止。心跳每三秒一次，任务租约六十秒，排队九十秒未领取则失败，最大执行时间沿用 `RT_LOCAL_TIMEOUT_MS`（默认二十分钟）。失败后不会自动重跑。
+
+自动协作继续最多六次回复；仅分析/方案/审查，通过后仍需人决定，不自动进入开发。网页设备管理沿用 V1 的内网访问权限，尚未实现登录或按成员隔离；只用于现有受信任内网。
+
+下载包采用固定文件白名单生成，仅含五个运行模块、README 和 package.json，不含配置、凭据、项目代码、数据库或 node_modules。

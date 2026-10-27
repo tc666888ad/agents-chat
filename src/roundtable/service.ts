@@ -1,7 +1,9 @@
+import { RtError } from './errors.js';
+import { ConnectorStore } from './connector.js';
 import { createHash, randomBytes } from 'node:crypto';
-import { realpathSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
+import { checkProjectDir } from './project-path.js';
+export { checkProjectDir } from './project-path.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { now, tx } from '../db/index.js';
 import { migrateRt, type AgentRow, type RtArtifactRow, type RtDocRow, type RtMessageRow, type RtRoomRow, type Stage } from './db.js';
@@ -29,38 +31,6 @@ const LOCAL_TASK = `【执行方式：本地 Agent】
 - 结论要落到代码：引用具体文件路径和行号（例如 src/a.ts:42）。
 - 不要联网。
 - 最终只输出 Markdown 正文（就是要发到群里的那条回复），不要输出过程说明。`;
-
-/** 不允许绑定为项目目录的位置（本身或其下级） */
-function forbiddenDirs(): { exact: string[]; tree: string[] } {
-  const home = homedir();
-  return {
-    exact: ['/', home, '/Users', '/Applications', '/Volumes', '/private/tmp', '/tmp', '/var', '/private/var'],
-    tree: ['/System', '/usr', '/bin', '/sbin', '/etc', '/private/etc', '/Library', '/dev', '/cores', resolve(home, '.ssh'), resolve(home, '.dsh'), resolve(home, '.codex'), resolve(home, '.aws'), resolve(home, '.gnupg'), resolve(home, '.config'), resolve(home, 'Library')],
-  };
-}
-
-/** 校验并规范化项目目录；'' 表示解绑。 */
-export function checkProjectDir(input: string): string {
-  const raw = input.trim();
-  if (!raw) return '';
-  if (!isAbsolute(raw)) throw new RtError('VALIDATION_FAILED', '项目目录要写绝对路径');
-  let real: string;
-  try {
-    real = realpathSync(raw);
-  } catch {
-    throw new RtError('VALIDATION_FAILED', '项目目录不存在');
-  }
-  if (!statSync(real).isDirectory()) throw new RtError('VALIDATION_FAILED', '项目目录不是文件夹');
-  const { exact, tree } = forbiddenDirs();
-  const norm = (d: string) => {
-    try { return realpathSync(d); } catch { return d; }
-  };
-  if (exact.map(norm).includes(real)) throw new RtError('VALIDATION_FAILED', '不能把整个系统目录或主目录当项目目录，选具体的项目文件夹');
-  for (const t of tree.map(norm)) {
-    if (real === t || real.startsWith(t + sep)) throw new RtError('VALIDATION_FAILED', '这个位置不允许给 Agent 读取');
-  }
-  return real;
-}
 
 /** 自定义 CLI 模型端点，不允许把凭据藏在 URL 中。 */
 function normalizeLocalBaseUrl(value: string): string {
@@ -97,15 +67,7 @@ const REVISE_TASK = `【任务：修订方案】
 根据下面的审查意见修订方案，输出完整的新版方案（Markdown，结构同上一版）。
 开头先用一个「## 本版修改」列表逐条说明：采纳了哪些意见、怎么改的；不采纳的写明理由。`;
 
-export class RtError extends Error {
-  constructor(
-    readonly code: 'VALIDATION_FAILED' | 'NOT_FOUND' | 'INVALID_STATE',
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
+export { RtError } from './errors.js';
 export interface AgentView {
   local_base_url: string;
   id: string;
@@ -180,7 +142,7 @@ export interface RoomSummary {
 }
 
 export interface RoomSnapshot {
-  room: { code: string; title: string; prd: string; project_dir: string; auto_collaborate: boolean; created_at: string };
+  room: { device_id: string; workspace_id: string; workspace_name: string; device_name: string; code: string; title: string; prd: string; project_dir: string; auto_collaborate: boolean; created_at: string };
   collaboration: Collaboration | null;
   members: (AgentView & { busy: boolean })[];
   messages: MessageView[];
@@ -228,6 +190,7 @@ function keyHint(key: string): string {
 }
 
 export class RoundtableService {
+  readonly connectors: ConnectorStore;
   private collaboration: CollaborationStore;
   private listeners = new Map<string, Set<(e: RoomEvent) => void>>();
   /** 正在生成中的回复：room:seq → 累计文本 + 取消器 */
@@ -251,6 +214,44 @@ export class RoundtableService {
     db.prepare(
       "UPDATE rt_messages SET status = 'error', error = '服务重启，回复中断' WHERE status IN ('pending','streaming') AND (agent_id IS NULL OR agent_id IN (SELECT id FROM rt_agents WHERE runtime IN ('api','local')))",
     ).run();
+    this.connectors = new ConnectorStore(db, {
+      valid: task => {
+        const row = db.prepare("SELECT m.* FROM rt_messages m JOIN rt_agents a ON m.agent_id=a.id JOIN rt_room_agents ra ON ra.room_code=m.room_code AND ra.agent_id=a.id WHERE m.room_code=? AND m.seq=? AND a.runtime='local'").get(task.room_code, task.seq) as RtMessageRow | undefined;
+        const room = db.prepare('SELECT * FROM rt_rooms WHERE code=?').get(task.room_code) as RtRoomRow | undefined;
+        return Boolean(row && room && ['pending','streaming'].includes(row.status) && room.device_id === task.device_id && room.workspace_id === task.workspace_id && (!this.collaboration.step(task.room_code, task.seq) || this.collaboration.identity(task.room_code, task.seq)));
+      },
+      payload: task => {
+        const row = this.messageRow(task.room_code, task.seq), agent = this.agentRow(row.agent_id!);
+        if (!isExecKind(agent.base_url)) throw new RtError('INVALID_STATE', '执行器配置不正确');
+        const workspace = this.connectors.workspace(task.device_id, task.workspace_id);
+        return { kind: agent.base_url, model: agent.model && agent.model !== 'default' ? agent.model : undefined,
+          prompt: this.localPrompt(task.room_code, agent, row, workspace.name, true) };
+      },
+      progress: (task, body, progress) => {
+        const code = task.room_code, seq = task.seq;
+        this.patch(code, seq, { ...(body === undefined ? {} : { body: this.collaboration.step(code, seq) ? visibleBody(body) : body, status: 'streaming' }), ...(progress === undefined ? {} : { progress }) });
+        this.emit(code, { type: 'message', message: this.liveView(code, seq) });
+      },
+      complete: (task, text) => {
+        const row = this.messageRow(task.room_code, task.seq);
+        const outcome = this.finishReply(task.room_code, row, text);
+        this.emit(task.room_code, { type: 'message', message: this.liveView(task.room_code, task.seq) });
+        this.emit(task.room_code, { type: 'members' });
+        this.settleCollaboration(task.room_code, this.messageRow(task.room_code, task.seq), outcome);
+      },
+      fail: (task, reason) => {
+        if (!this.exists(task.room_code, task.seq)) return;
+        const row = this.messageRow(task.room_code, task.seq);
+        if (!['pending','streaming'].includes(row.status)) return;
+        this.patch(task.room_code, task.seq, { status: 'error', error: reason, progress: '' });
+        this.emit(task.room_code, { type: 'message', message: this.liveView(task.room_code, task.seq) });
+        this.emit(task.room_code, { type: 'members' });
+        this.failCollaboration(task.room_code, task.seq, reason);
+      },
+      changed: device => {
+        for (const room of db.prepare('SELECT code FROM rt_rooms WHERE device_id=?').all(device) as { code: string }[]) this.emit(room.code, { type: 'members' });
+      },
+    });
   }
 
   // ---------- 事件 ----------
@@ -288,7 +289,7 @@ export class RoundtableService {
     return row;
   }
 
-  private agentView(r: AgentRow): AgentView {
+  private agentView(r: AgentRow, room?: RtRoomRow): AgentView {
     const n = (this.db.prepare('SELECT COUNT(*) AS n FROM rt_room_agents WHERE agent_id = ?').get(r.id) as { n: number }).n;
     return {
       id: r.id,
@@ -307,7 +308,7 @@ export class RoundtableService {
       connect_url: r.runtime === 'mcp' ? mcpUrl() : null,
       exec_kind: r.runtime === 'local' && isExecKind(r.base_url) ? r.base_url : null,
       exec_label: r.runtime === 'local' && isExecKind(r.base_url) ? EXEC_LABEL[r.base_url] : '',
-      available: r.runtime === 'local' ? isExecKind(r.base_url) && Boolean(resolveBin(r.base_url)) : true,
+      available: r.runtime === 'local' ? (room?.device_id ? this.connectors.list().some(d => d.id === room.device_id && d.online && d.executors.includes(r.base_url as ExecKind) && d.workspaces.some(w => w.id === room.workspace_id)) : isExecKind(r.base_url) && Boolean(resolveBin(r.base_url))) : true,
     };
   }
 
@@ -368,7 +369,7 @@ export class RoundtableService {
     if (v.runtime !== existing.runtime && this.db.prepare("SELECT 1 FROM rt_messages WHERE agent_id=? AND status IN ('pending','streaming') LIMIT 1").get(agentId)) {
       throw new RtError('INVALID_STATE', '先停止这个 Agent 的待办，再切换接入方式');
     }
-    for (const code of this.roomsOfAgent(agentId)) this.pauseForChange(code);
+    for (const code of this.roomsOfAgent(agentId)) { this.pauseForChange(code); this.cancelAgentTasks(code, agentId); }
     this.db
       .prepare('UPDATE rt_agents SET name=?, base_url=?, model=?, api_key=?, persona=?, runtime=?, local_base_url=?, updated_at=? WHERE id=?')
       .run(v.name, v.base_url, v.model, v.api_key, v.persona, v.runtime, v.local_base_url, now(), agentId);
@@ -595,23 +596,32 @@ export class RoundtableService {
     return row;
   }
 
-  updateRoom(code: string, input: { title?: string; prd?: string; project_dir?: string; auto_collaborate?: boolean }): RoomSnapshot {
+  updateRoom(code: string, input: { title?: string; prd?: string; project_dir?: string; device_id?: string; workspace_id?: string; auto_collaborate?: boolean }): RoomSnapshot {
     const row = this.roomRow(code);
     const title = input.title === undefined ? row.title : input.title.trim() || row.title;
     const prd = input.prd === undefined ? row.prd : input.prd.slice(0, 60_000);
     if (input.auto_collaborate !== undefined && typeof input.auto_collaborate !== 'boolean') throw new RtError('VALIDATION_FAILED', '自动协作开关必须为布尔值');
     const before = row.project_dir ?? '';
+    const binding = input.device_id !== undefined || input.workspace_id !== undefined;
+    if (binding && (typeof input.device_id !== 'string' || typeof input.workspace_id !== 'string')) throw new RtError('VALIDATION_FAILED', '电脑和项目必须一起选择');
+    const device = binding ? input.device_id! : row.device_id;
+    const workspace = binding ? input.workspace_id! : row.workspace_id;
+    if (Boolean(device) !== Boolean(workspace)) throw new RtError('VALIDATION_FAILED', '请选择电脑及其项目');
+    if (binding && device) this.connectors.workspace(device, workspace);
+    if (device && input.project_dir !== undefined && input.project_dir.trim()) throw new RtError('VALIDATION_FAILED', '成员电脑项目不能同时填写服务器目录');
     const dir = input.project_dir === undefined ? before : checkProjectDir(String(input.project_dir));
-    if (dir !== before && this.hasLocalTasks(code)) throw new RtError('INVALID_STATE', '本地 Agent 还在跑，先停止再换项目目录');
-    if (dir !== before || prd !== row.prd || input.auto_collaborate === false) this.pauseForChange(code);
-    this.db.prepare('UPDATE rt_rooms SET title=?, prd=?, project_dir=?, auto_collaborate=?, updated_at=? WHERE code=?').run(title.slice(0, 100), prd, dir, input.auto_collaborate === undefined ? row.auto_collaborate : Number(input.auto_collaborate), now(), code);
-    if (dir !== before) this.system(code, dir ? `绑定了项目目录 ${dir}` : '解绑了项目目录');
+    const changed = dir !== before || device !== row.device_id || workspace !== row.workspace_id;
+    if (changed && this.hasLocalTasks(code)) throw new RtError('INVALID_STATE', '本地 Agent 还在跑，先停止再换项目');
+    if (changed || prd !== row.prd || input.auto_collaborate === false) this.pauseForChange(code);
+    this.db.prepare('UPDATE rt_rooms SET title=?, prd=?, project_dir=?, device_id=?, workspace_id=?, auto_collaborate=?, updated_at=? WHERE code=?').run(title.slice(0, 100), prd, dir, device, workspace, input.auto_collaborate === undefined ? row.auto_collaborate : Number(input.auto_collaborate), now(), code);
+    if (changed) this.system(code, device ? `绑定了成员电脑项目 ${this.connectors.workspace(device, workspace).name}` : dir ? `绑定了项目目录 ${dir}` : '解绑了项目');
     this.emit(code, { type: 'room' });
     return this.snapshot(code);
   }
 
   deleteRoom(code: string): void {
     this.roomRow(code);
+    this.connectors.cancel(code);
     for (const [key, item] of this.live) if (key.startsWith(`${code}:`)) item.abort.abort();
     tx(this.db, () => {
       this.db.prepare('DELETE FROM rt_collaboration_steps WHERE room_code=?').run(code);
@@ -671,11 +681,12 @@ export class RoundtableService {
     const rows = this.db
       .prepare('SELECT * FROM rt_messages WHERE room_code = ? ORDER BY seq')
       .all(code) as unknown as RtMessageRow[];
+    const device = this.connectors.list().find(d => d.id === room.device_id);
     const busy = new Set(rows.filter((m) => m.status === 'pending' || m.status === 'streaming').map((m) => m.agent_id));
     return {
       collaboration: this.collaboration.get(code),
-      room: { auto_collaborate: Boolean(room.auto_collaborate), code: room.code, title: room.title, prd: room.prd, project_dir: room.project_dir ?? '', created_at: room.created_at },
-      members: this.memberRows(code).map((a) => ({ ...this.agentView(a), busy: busy.has(a.id) })),
+      room: { device_id: room.device_id, workspace_id: room.workspace_id, device_name: device?.name ?? '', workspace_name: device?.workspaces.find(w => w.id === room.workspace_id)?.name ?? '', auto_collaborate: Boolean(room.auto_collaborate), code: room.code, title: room.title, prd: room.prd, project_dir: room.project_dir ?? '', created_at: room.created_at },
+      members: this.memberRows(code).map((a) => ({ ...this.agentView(a, room), busy: busy.has(a.id) })),
       messages: rows.map((m) => this.messageView(m)),
       docs: this.docRows(code).map((d) => this.docView(d)),
       artifacts: this.artifactRows(code).map((a) => this.artifactView(a)),
@@ -835,6 +846,13 @@ export class RoundtableService {
       return;
     }
     if (agent.runtime === 'local') {
+      const room = this.roomRow(code);
+      if (room.device_id) {
+        this.connectors.enqueue(code, reply.seq, room.device_id, room.workspace_id);
+        this.patch(code, reply.seq, { progress: '等待成员电脑领取' });
+        this.emit(code, { type: 'message', message: this.liveView(code, reply.seq) });
+        return;
+      }
       void this.runLocal(code, reply.seq);
       return;
     }
@@ -853,7 +871,12 @@ export class RoundtableService {
   private assertLocalReady(code: string, agents: AgentRow[]): void {
     const locals = agents.filter((a) => a.runtime === 'local');
     if (!locals.length) return;
-    const dir = this.roomRow(code).project_dir ?? '';
+    const room = this.roomRow(code);
+    if (room.device_id) {
+      for (const a of locals) this.connectors.ready(room.device_id, room.workspace_id, a.base_url);
+      return;
+    }
+    const dir = room.project_dir ?? '';
     if (!dir) throw new RtError('INVALID_STATE', `先在房间绑定项目目录，${locals.map((a) => a.name).join('、')} 才能读代码`);
     checkProjectDir(dir); // 目录可能已被删除/移动
     for (const a of locals) {
@@ -1027,6 +1050,7 @@ export class RoundtableService {
     if (row.status !== 'pending' && row.status !== 'streaming') return;
     const c = this.collaboration.get(code);
     if (c?.status === 'running' && c.current_seq === seq) this.setCollaborationStatus(code, 'stopped', '已停止协作');
+    this.connectors.cancel(code, seq);
     const live = this.live.get(`${code}:${seq}`);
     live?.abort.abort(new Error('已停止'));
     this.patch(code, seq, { status: 'error', body: live?.body ?? row.body, error: '已停止', progress: '' });
@@ -1154,9 +1178,9 @@ export class RoundtableService {
   }
 
   /** 把群聊上下文拼成一段纯文本任务，交给本地 Agent。 */
-  private localPrompt(code: string, agent: AgentRow, reply: RtMessageRow, cwd: string): string {
+  private localPrompt(code: string, agent: AgentRow, reply: RtMessageRow, cwd: string, remote = false): string {
     const msgs = this.buildContext(code, agent, reply);
-    const parts = [LOCAL_TASK, `项目目录：${cwd}`, '', msgs[0]!.content];
+    const parts = [LOCAL_TASK, remote ? `授权项目：${cwd}（实际目录由本机连接器确定）` : `项目目录：${cwd}`, '', msgs[0]!.content];
     const rest = msgs.slice(1);
     if (rest.length) {
       parts.push('', '—— 群聊记录（最近，按时间顺序）——');

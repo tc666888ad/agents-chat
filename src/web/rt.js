@@ -60,7 +60,7 @@ async function copyText(text) {
 /** 本地 Agent 的简要说明：执行器 · 模型 · 是否可用 */
 function localLine(a) {
   const model = a.model && a.model !== 'default' ? ` · ${esc(a.model)}` : '';
-  return `本地 ${esc(a.exec_label || a.base_url)}${model}${a.available === false ? ' · <span class="warn">本机没找到执行器</span>' : ''}`;
+  return `本地 ${esc(a.exec_label || a.base_url)}${model}${a.available === false ? ' · <span class="warn">所选电脑离线或执行器不可用</span>' : ''}`;
 }
 
 function mcpUrl(agent) {
@@ -185,7 +185,7 @@ function agentForm(existing = null) {
           <button type="button" class="preset ${initial.runtime === 'mcp' ? 'on' : ''}" data-runtime="mcp">外部 Agent（MCP）</button>
         </div>
         <div id="local-fields" class="mcp-help" ${initial.runtime !== 'local' ? 'hidden' : ''}>
-          <b>由圆桌直接启动本机 Agent</b><p class="muted small">点「出方案 / 审查」或 @ 它时，服务在房间绑定的项目目录里以只读模式启动执行器，读项目记忆和代码，结果自动回到群里并落成产物。</p>
+          <b>由所选电脑运行本地 Agent</b><p class="muted small">点「出方案 / 审查」或 @ 它时，连接器在房间选择的电脑和授权项目中以只读模式启动执行器，读项目记忆和代码，结果自动回到群里并落成产物。</p>
           <div class="row-2">
             <label class="field"><span>执行器</span>
               <select name="exec_kind">
@@ -195,9 +195,9 @@ function agentForm(existing = null) {
             <label class="field"><span>模型 <em>可选，留空用执行器默认</em></span>
               <input name="local_model" value="${esc(existing?.runtime === 'local' && existing.model !== 'default' ? existing.model : '')}" placeholder="默认" /></label>
           </div>
-          <label class="field"><span>本地 Agent 模型地址 <em>可选，仅覆盖此 Agent</em></span>
+          <label class="field"><span>同机模式模型地址 <em>连接器使用成员电脑的 CLI 配置</em></span>
             <input name="local_base_url" value="${esc(existing?.local_base_url || '')}" placeholder="留空使用 CLI 自身配置" /></label>
-          <label class="field"><span>本地 Agent API Key ${isEdit && existing.runtime === 'local' && existing.has_key ? '<em>已保存，留空不改</em>' : '<em>仅保存在本机，运行时通过环境传入</em>'}</span>
+          <label class="field"><span>同机模式 API Key ${isEdit && existing.runtime === 'local' && existing.has_key ? '<em>已保存，留空不改</em>' : '<em>保存在网页服务器，仅用于同机执行</em>'}</span>
             <input name="local_api_key" type="password" autocomplete="new-password" placeholder="留空使用 CLI 自身认证" /></label>
           <p id="local-connection-help" class="muted small"></p>
         </div>
@@ -208,7 +208,7 @@ function agentForm(existing = null) {
             <label class="field"><span>模型</span>
               <input name="model" value="${esc(initial.model)}" placeholder="deepseek-chat" /></label>
           </div>
-          <label class="field key-field"><span>API Key ${isEdit && existing.has_key ? `<em>已保存 ${esc(existing.key_hint)}，留空不改</em>` : '<em>只存在本机</em>'}</span>
+          <label class="field key-field"><span>API Key ${isEdit && existing.has_key ? `<em>已保存 ${esc(existing.key_hint)}，留空不改</em>` : '<em>保存在网页服务器</em>'}</span>
             <input name="api_key" type="password" autocomplete="off" placeholder="${isEdit && existing.has_key ? '••••••（不改就留空）' : 'sk-…'}" /></label>
         </div>
         <div id="mcp-fields" class="mcp-help" ${initial.runtime !== 'mcp' ? 'hidden' : ''}>
@@ -553,7 +553,8 @@ async function openRoom(code, { push = true } = {}) {
   $('#prd').value = state.snap.room.prd;
   $('#prd-state').textContent = '';
   $('#project-dir').value = state.snap.room.project_dir || '';
-  $('#project-state').textContent = state.snap.room.project_dir ? '已绑定' : '未绑定';
+  projectDirty = false;
+  await loadDevices();
   renderRooms();
   renderMembers();
   renderDocuments();
@@ -578,9 +579,9 @@ async function refreshRoom() {
   state.snap = snap;
   if (document.activeElement !== $('#room-title')) $('#room-title').value = snap.room.title;
   if (document.activeElement !== $('#prd')) $('#prd').value = snap.room.prd;
-  if (document.activeElement !== $('#project-dir')) {
+  if (!projectDirty && document.activeElement !== $('#project-dir')) {
     $('#project-dir').value = snap.room.project_dir || '';
-    $('#project-state').textContent = snap.room.project_dir ? '已绑定' : '未绑定';
+    if (!projectDirty) renderProjectBinding();
   }
   renderMembers();
   renderDocuments();
@@ -616,12 +617,13 @@ function refreshMembers() {
     if (!snap || snap.room.code !== state.code) return;
     state.snap.members = snap.members;
     renderMembers();
+    await loadDevices().catch(() => {});
     loadRooms();
   }, 80);
 }
 
 setInterval(() => {
-  if (!document.hidden && state.snap?.members.some((m) => m.runtime === 'mcp')) refreshMembers();
+  if (!document.hidden && state.snap?.members.some((m) => m.runtime === 'mcp' || m.runtime === 'local')) refreshMembers();
 }, 30000);
 
 // ---------- 需求文档与产物 ----------
@@ -763,7 +765,7 @@ function flowModal(action, refSeq = null) {
   const modal = openModal(`<div class="modal-head"><h2>${labels[action]}</h2><button class="x" data-close>×</button></div>
     <form class="modal-body form" id="flow-form"><p class="muted small">${action === 'plan' ? '它会读取已上传的需求文档和补充说明。' : action === 'review' ? '审查模型会读取需求文档和选中的方案。' : '模型会读取上一版方案和审查意见，输出完整新版。'}</p>
     <label class="field"><span>选择 agent</span><select name="agent_id">${candidates.map((m) => `<option value="${m.id}">${esc(m.name)}${m.runtime === 'mcp' ? ` · 外部 Agent · ${m.connected ? '近期连接' : '等待连接'}` : m.runtime === 'local' ? ` · 本地 ${esc(m.exec_label || m.base_url)}` : m.demo ? '（演示）' : ` · ${esc(m.model)}`}</option>`).join('')}</select></label>
-    <p class="muted small">本地 Agent 会在房间绑定的项目目录里只读运行，读完代码后结果自动回到群里${state.snap.room.project_dir ? `（当前：${esc(state.snap.room.project_dir)}）` : '，<span class="warn">请先在右侧绑定项目目录</span>'}。外部 Agent 需要到其客户端要求它处理待办。</p>
+    <p class="muted small">本地 Agent 会在房间绑定的项目目录里只读运行，读完代码后结果自动回到群里${state.snap.room.device_id ? `（当前：${esc(state.snap.room.device_name)} / ${esc(state.snap.room.workspace_name)}）` : state.snap.room.project_dir ? `（当前：${esc(state.snap.room.project_dir)}）` : '，<span class="warn">请先在右侧选择电脑和项目</span>'}。外部 Agent 需要到其客户端要求它处理待办。</p>
     <div class="modal-foot"><span class="spacer"></span><button type="button" class="btn ghost" data-close>取消</button><button class="btn primary" type="submit">开始${action === 'review' ? '审查' : action === 'revise' ? '修订' : '生成'}</button></div></form>`);
   $('#flow-form', modal).addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1208,22 +1210,95 @@ $('#prd').addEventListener('input', () => {
   }, 600);
 });
 
-async function saveProjectDir() {
-  const value = $('#project-dir').value.trim();
+let devices = [];
+let projectDirty = false;
+let deviceLoad = 0;
+
+async function loadDevices() {
+  const code = state.code;
+  const request = ++deviceLoad;
+  try {
+    const result = await api('/api/rt/devices');
+    if (code !== state.code || request !== deviceLoad) return;
+    devices = result.devices;
+    renderProjectBinding();
+  } catch (err) {
+    if (code === state.code) $('#device-state').textContent = `读取电脑列表失败：${err.message}`;
+  }
+}
+function renderProjectBinding() {
+  if (!state.snap) return;
+  const room = state.snap.room;
+  const selected = projectDirty ? $('#project-device').value : room.device_id || (room.project_dir ? '__server__' : '');
+  const workspace = projectDirty ? $('#project-workspace').value : room.workspace_id || '';
+  $('#project-device').innerHTML = '<option value="">未绑定 / 解绑</option>' + devices.map(d =>
+    `<option value="${esc(d.id)}">${esc(d.name)} · ${d.online ? '在线' : '离线'}</option>`).join('') +
+    (selected && selected !== '__server__' && !devices.some(d => d.id === selected) ? `<option value="${esc(selected)}">原电脑已吊销或不可用</option>` : '') +
+    '<option value="__server__">同机执行（高级）</option>';
+  $('#project-device').value = selected;
+  renderWorkspaceOptions(workspace);
+  $('#project-state').textContent = projectDirty ? '未保存' : room.device_id ? `已绑定 ${room.workspace_name || '项目不可用'}` : room.project_dir ? '已绑定同机目录' : '未绑定';
+}
+function renderWorkspaceOptions(selected = '') {
+  const device = $('#project-device').value;
+  const d = devices.find(d => d.id === device);
+  $('#workspace-field').hidden = !device || device === '__server__';
+  $('#server-project-field').hidden = device !== '__server__';
+  $('#project-workspace').innerHTML = '<option value="">请选择授权项目</option>' + (d?.workspaces || []).map(w =>
+    `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join('');
+  if (selected && d && !d.workspaces.some(w => w.id === selected)) $('#project-workspace').innerHTML += `<option value="${esc(selected)}">原项目已取消授权</option>`;
+  $('#project-workspace').value = selected;
+  $('#device-state').textContent = d ? `${d.online ? '电脑在线' : '电脑离线，请启动连接器'} · 执行器：${d.executors.join(' / ') || '未找到'}。模型认证使用该电脑的 CLI 配置。` : device === '__server__' ? '同机模式使用原有模型配置。' : '先配对电脑，在该电脑登记项目并启动连接器。';
+}
+$('#project-device').addEventListener('change', () => {
+  projectDirty = true; renderWorkspaceOptions(); $('#project-state').textContent = '未保存';
+});
+$('#project-workspace').addEventListener('change', () => { projectDirty = true; $('#project-state').textContent = '未保存'; });
+$('#project-dir').addEventListener('input', () => { projectDirty = true; $('#project-state').textContent = '未保存'; });
+
+async function saveProjectBinding() {
+  const code = state.code;
+  const device = $('#project-device').value;
+  const workspace = $('#project-workspace').value;
+  const body = device === '__server__' ? { device_id: '', workspace_id: '', project_dir: $('#project-dir').value.trim() } :
+    { device_id: device, workspace_id: device ? workspace : '', ...(device ? {} : { project_dir: '' }) };
+  if (device && device !== '__server__' && !workspace) return toast('请选择这台电脑的授权项目', 'bad');
   $('#project-state').textContent = '保存中…';
   try {
-    const snap = await api(`/api/rt/rooms/${state.code}`, { method: 'PATCH', body: { project_dir: value } });
-    state.snap.room = snap.room;
-    $('#project-dir').value = snap.room.project_dir || '';
-    $('#project-state').textContent = snap.room.project_dir ? '已绑定' : '未绑定';
+    const snap = await api(`/api/rt/rooms/${encodeURIComponent(code)}`, { method: 'PATCH', body });
+    if (state.code !== code) return;
+    state.snap.room = snap.room; state.snap.members = snap.members || state.snap.members;
+    projectDirty = false; renderProjectBinding(); renderMembers();
   } catch (err) {
-    $('#project-state').textContent = '保存失败';
+    if (state.code === code) $('#project-state').textContent = '保存失败';
     toast(err.message, 'bad');
   }
 }
-$('#project-save').addEventListener('click', saveProjectDir);
-$('#project-dir').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); saveProjectDir(); }
+$('#project-save').addEventListener('click', saveProjectBinding);
+$('#project-dir').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveProjectBinding(); } });
+$('#device-refresh').addEventListener('click', loadDevices);
+$('#device-pair').addEventListener('click', async () => {
+  try {
+    const pairing = await api('/api/rt/devices/pairing', { method: 'POST' });
+    openModal(`<h2>连接成员电脑</h2>
+      <p>在要运行 Codex/DSH 的电脑上操作。需安装 Node.js 22 或以上，并配置好所选 CLI。</p>
+      <p><a href="/downloads/agents-chat-connector.tar.gz" download>下载本地连接器</a>，解压后在该文件夹打开终端。</p>
+      <p>1. 配对电脑，按终端提示输入下方配对码：</p>
+      <pre class="code"><code>node connector/cli.js pair --server "${esc(location.origin)}"</code></pre>
+      <p>一次性配对码（十分钟内有效）：</p><pre class="code"><code>${esc(pairing.code)}</code></pre>
+      <p>2. 登记你允许分析的项目（将路径换成自己的项目）：</p>
+      <pre class="code"><code>node connector/cli.js add-workspace "/项目绝对路径" --name "业务项目"</code></pre>
+      <p>3. 启动连接器，保持终端运行：</p><pre class="code"><code>node connector/cli.js run</code></pre>
+      <p class="muted small">回到网页点「刷新」，选择电脑和项目并保存。Token、项目路径及 CLI 认证留在本机；网页仅选择授权项目。Ctrl+C 停止，修改项目需先停止再运行。连接器模式使用本机 CLI 配置及网页指定的模型名。配对码不要转发。</p>
+      <div class="modal-actions"><button type="button" class="btn" data-close>知道了</button></div>`);
+  } catch (err) { toast(err.message, 'bad'); }
+});
+$('#device-revoke').addEventListener('click', async () => {
+  const d = devices.find(d => d.id === $('#project-device').value);
+  if (!d) return toast('先选择要吊销的成员电脑', 'bad');
+  if (!window.confirm(`吊销「${d.name}」？正在执行的任务将停止，重新使用需要配对。`)) return;
+  try { await api(`/api/rt/devices/${encodeURIComponent(d.id)}`, { method: 'DELETE' }); await loadDevices(); await refreshRoom(); }
+  catch (err) { toast(err.message, 'bad'); }
 });
 
 $('#delete-room').addEventListener('click', async () => {

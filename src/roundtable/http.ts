@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { RtError, type RoundtableService } from './service.js';
 
-const STATUS: Record<RtError['code'], number> = { VALIDATION_FAILED: 400, NOT_FOUND: 404, INVALID_STATE: 409 };
+const STATUS: Record<RtError['code'], number> = { VALIDATION_FAILED: 400, NOT_FOUND: 404, INVALID_STATE: 409, UNAUTHORIZED: 401 };
 
 async function handle<T>(reply: FastifyReply, fn: () => T | Promise<T>): Promise<unknown> {
   try {
@@ -17,6 +17,26 @@ async function handle<T>(reply: FastifyReply, fn: () => T | Promise<T>): Promise
 type P = { Params: { code: string; id: string; seq: string }; Body: Record<string, unknown> };
 
 export function registerRoundtableApi(app: FastifyInstance, rt: RoundtableService): void {
+  const shutdown = new AbortController();
+  app.get('/api/rt/devices', (_req, reply) => handle(reply, () => ({ devices: rt.connectors.list() })));
+  app.post('/api/rt/devices/pairing', (_req, reply) => handle(reply, () => rt.connectors.createPairing()));
+  app.delete<P>('/api/rt/devices/:id', (req, reply) => handle(reply, () => (rt.connectors.revoke(req.params.id), {})));
+  app.post<P>('/api/rt/connector/pair', (req, reply) => handle(reply, () => rt.connectors.pair(String(req.body?.code ?? ''), String(req.body?.name ?? ''))));
+  const deviceId = (authorization?: string) => rt.connectors.authenticate(authorization?.match(/^Bearer (\S+)$/i)?.[1] ?? '');
+  app.post<P>('/api/rt/connector/hello', (req, reply) => handle(reply, () => rt.connectors.hello(deviceId(req.headers.authorization), req.body ?? {})));
+  app.post<{ Querystring: { wait?: string } }>('/api/rt/connector/claim', (req, reply) => handle(reply, async () => {
+    const device = deviceId(req.headers.authorization);
+    const abort = new AbortController(); const onClose = () => abort.abort();
+    reply.raw.on('close', onClose);
+    try { return { task: await rt.connectors.waitClaim(device, Number(req.query.wait ?? 0), AbortSignal.any([abort.signal, shutdown.signal])) }; }
+    finally { reply.raw.off('close', onClose); }
+  }));
+  app.post<P>('/api/rt/connector/attempts/:id/progress', (req, reply) => handle(reply, () => rt.connectors.progress(deviceId(req.headers.authorization), req.params.id, req.body ?? {})));
+  app.post<P>('/api/rt/connector/attempts/:id/complete', (req, reply) => handle(reply, () => (rt.connectors.complete(deviceId(req.headers.authorization), req.params.id, req.body?.body as string), {})));
+  app.post<P>('/api/rt/connector/attempts/:id/fail', (req, reply) => handle(reply, () => (rt.connectors.fail(deviceId(req.headers.authorization), req.params.id, String(req.body?.error ?? '')), {})));
+  const sweep = setInterval(() => rt.connectors.sweep(), 5000);
+  sweep.unref(); app.addHook('preClose', async () => { shutdown.abort(); clearInterval(sweep); });
+
   // agent 库（跨房间复用）
   app.get('/api/rt/agents', (_req, reply) => handle(reply, () => ({ agents: rt.listAgents() })));
   app.post<P>('/api/rt/agents', (req, reply) => handle(reply, () => rt.createAgentWithToken(req.body ?? {})));
