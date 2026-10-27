@@ -1,6 +1,6 @@
 # AI 圆桌 · 0.4
 
-最新开发交接：[本地 Agent 自动执行的现状与下一步（2026-10-27）](docs/superpowers/specs/2026-10-27-handoff-local-agent-orchestration.md)。新对话接续开发请先读此文。
+最新开发交接：[本地 Agent 自动执行的现状与下一步（2026-10-27）](docs/superpowers/specs/2026-10-27-handoff-local-agent-orchestration.md)。新对话接续开发请先读此文。 当前 V1 已部署内网并推送 GitHub；下一阶段待办是让服务器网页通过本地连接器调用成员电脑上的项目与 Codex/DSH，连接器尚未实现。
 
 新版首页已支持上传需求文档、API 模型与外部 MCP Agent、出方案→审查→修订→定稿。
 
